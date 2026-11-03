@@ -6,12 +6,12 @@ The site can be published with GitHub Pages. There is no server. The passcode ne
 
 ## One-time GitHub Pages setting
 
-The workflow [`.github/workflows/pages.yml`](.github/workflows/pages.yml) deploys on every push to `main`. GitHub still needs one manual choice before the first deploy:
+The workflow [`.github/workflows/pages.yml`](.github/workflows/pages.yml) deploys on every push to `main`. It asks GitHub to enable Pages with Actions as the source. If that request is rejected, set it once by hand:
 
 1. Open **Settings → Pages → Build and deployment**.
 2. Set **Source** to **GitHub Actions** (not “Deploy from a branch”).
 
-If that source option is missing, open **Settings → Actions → General** and allow actions, then check Pages again after this workflow is on `main`. The first successful run creates the `github-pages` environment.
+If that source option is missing, open **Settings → Actions → General** and allow actions, then check Pages again. The first successful run creates the `github-pages` environment.
 
 Expected site: <https://mesecher21-cell.github.io/College-tracker/>
 
