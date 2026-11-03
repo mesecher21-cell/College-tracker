@@ -1,0 +1,217 @@
+{
+  "profile": {
+    "name": "Alex Example",
+    "classYear": 2028,
+    "gpa": 3.14,
+    "notes": "FAKE SAMPLE. Not a real student. Every school and person in this file is made up."
+  },
+  "lastUpdated": "2026-11-01",
+  "upcoming": [
+    {
+      "date": "2026-12-01",
+      "title": "Sample campus tour",
+      "school": "Northwind Polytechnic"
+    }
+  ],
+  "schools": [
+    {
+      "id": "northwind",
+      "name": "Northwind Polytechnic",
+      "location": "Faketon, ZZ",
+      "level": "NCAA D3",
+      "sports": ["Basket Weaving"],
+      "status": "offer",
+      "priority": 1,
+      "offers": [
+        {
+          "sport": "Basket Weaving",
+          "type": "sample athletic offer",
+          "amount": "$0 (fake)",
+          "date": "2026-01-02",
+          "notes": "Obviously fake sample offer."
+        }
+      ],
+      "application": {
+        "status": "applied",
+        "submitted": "2026-01-05",
+        "decision": "",
+        "decisionDate": ""
+      },
+      "visits": [
+        {
+          "date": "2025-11-20",
+          "type": "campus",
+          "notes": "Sample visit. Nothing here is real."
+        }
+      ],
+      "scholarships": [
+        {
+          "name": "Example Full-Ride Scholarship",
+          "status": "in the running",
+          "notes": "Placeholder scholarship. Not real."
+        }
+      ],
+      "contacts": [
+        {
+          "name": "Sam Placeholder",
+          "role": "Sample coach",
+          "sport": "Basket Weaving",
+          "email": "sam.placeholder@example.com",
+          "phone": "555-0100"
+        }
+      ],
+      "engineeringNotes": "",
+      "nextSteps": [
+        {
+          "date": "2026-12-01",
+          "text": "Sample campus tour"
+        }
+      ],
+      "comms": [
+        {
+          "date": "2026-01-10",
+          "channel": "email",
+          "direction": "out",
+          "with": "Sam Placeholder",
+          "summary": "Sent a fake follow-up. Example only."
+        },
+        {
+          "date": "2026-01-12",
+          "channel": "text",
+          "direction": "in",
+          "with": "Sam Placeholder",
+          "summary": "Coach replied with sample text."
+        }
+      ]
+    },
+    {
+      "id": "lakeshore",
+      "name": "Lakeshore Institute",
+      "location": "Sample Harbor, QQ",
+      "level": "JUCO",
+      "sports": ["Chess"],
+      "status": "accepted",
+      "priority": 2,
+      "offers": [],
+      "application": {
+        "status": "accepted",
+        "submitted": "2026-02-01",
+        "decision": "accepted",
+        "decisionDate": "2026-03-01"
+      },
+      "visits": [
+        {
+          "date": "2026-02-14",
+          "type": "campus",
+          "notes": "Fictional visit."
+        }
+      ],
+      "scholarships": [],
+      "contacts": [
+        {
+          "name": "Jordan Sample",
+          "role": "Sample coach",
+          "sport": "Chess",
+          "email": "jordan.sample@example.com",
+          "phone": ""
+        }
+      ],
+      "engineeringNotes": "",
+      "nextSteps": [
+        {
+          "date": "2026-12-15",
+          "text": "Send the sample thank-you"
+        }
+      ],
+      "comms": [
+        {
+          "date": "2026-02-20",
+          "channel": "call",
+          "direction": "in",
+          "with": "Jordan Sample",
+          "summary": "Sample phone call. Not a real coach."
+        },
+        {
+          "date": "2026-02-21",
+          "channel": "in-person",
+          "direction": "out",
+          "with": "Jordan Sample",
+          "summary": "Sample in-person hello."
+        }
+      ]
+    },
+    {
+      "id": "placeholder-state",
+      "name": "Placeholder State",
+      "location": "Nowhere, XX",
+      "level": "NCAA D1",
+      "sports": [],
+      "status": "backup",
+      "priority": 3,
+      "offers": [],
+      "application": {
+        "status": "pending",
+        "submitted": "",
+        "decision": "",
+        "decisionDate": ""
+      },
+      "visits": [],
+      "scholarships": [],
+      "contacts": [],
+      "engineeringNotes": "Sample note: the engineering path in this file is fictional.",
+      "nextSteps": [
+        {
+          "date": "",
+          "text": "Submit the sample application"
+        }
+      ],
+      "comms": [
+        {
+          "date": "2026-04-04",
+          "channel": "X DM",
+          "direction": "out",
+          "with": "Admissions Example",
+          "summary": "Sample direct message. Not a real account."
+        }
+      ]
+    },
+    {
+      "id": "closed-door",
+      "name": "Closed Door College",
+      "location": "Exampleville, YY",
+      "level": "JUCO",
+      "sports": ["Tiddlywinks"],
+      "status": "closed",
+      "priority": 4,
+      "offers": [],
+      "application": {
+        "status": "",
+        "submitted": "",
+        "decision": "",
+        "decisionDate": ""
+      },
+      "visits": [],
+      "scholarships": [],
+      "contacts": [
+        {
+          "name": "Pat Notreal",
+          "role": "Sample coach",
+          "sport": "Tiddlywinks",
+          "email": "",
+          "phone": "555-0199"
+        }
+      ],
+      "engineeringNotes": "",
+      "nextSteps": [],
+      "comms": [
+        {
+          "date": "2025-12-01",
+          "channel": "other",
+          "direction": "in",
+          "with": "Pat Notreal",
+          "summary": "Sample: coach passed. Fictional and closed."
+        }
+      ]
+    }
+  ]
+}

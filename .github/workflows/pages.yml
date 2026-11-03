@@ -1,0 +1,62 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Block plaintext tracker data
+        run: |
+          if [ -f data/tracker.json ]; then
+            echo "Refusing to deploy because data/tracker.json is present."
+            exit 1
+          fi
+          if git ls-files --error-unmatch data/tracker.json >/dev/null 2>&1; then
+            echo "Refusing to deploy because data/tracker.json is tracked."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify encrypt and decrypt round-trip
+        run: node scripts/roundtrip.mjs
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp -a index.html sw.js manifest.webmanifest robots.txt .nojekyll css js icons data _site/
+          rm -f _site/data/tracker.json
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

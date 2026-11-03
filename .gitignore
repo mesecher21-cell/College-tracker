@@ -1,0 +1,11 @@
+# Plaintext recruiting data. Never commit this file.
+data/tracker.json
+
+# Local secrets and environment files.
+.env
+.env.*
+
+# Test output, installed tools, and OS junk.
+/node_modules/
+/test-results/
+.DS_Store
