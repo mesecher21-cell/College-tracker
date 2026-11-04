@@ -1,7 +1,7 @@
 // App shell is network-first so a published update shows the next time the app opens.
 // The encrypted tracker is also network-first and is cached only as an offline fallback.
 
-const CACHE = "college-tracker-v1";
+const CACHE = "college-tracker-v2";
 const SHELL = [
   "./",
   "./index.html",

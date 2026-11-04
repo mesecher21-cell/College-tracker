@@ -13,6 +13,43 @@
       "school": "Northwind Polytechnic"
     }
   ],
+  "todos": [
+    {
+      "id": "fake-highlight",
+      "due": "2026-10-20",
+      "time": "9:00 AM",
+      "priority": "high",
+      "schoolId": "northwind",
+      "school": "Northwind Polytechnic",
+      "coach": "Sam Placeholder",
+      "sport": "Basket Weaving",
+      "action": "Send the fake highlight film",
+      "link": "https://example.com/fake-highlight",
+      "status": "open"
+    },
+    {
+      "id": "fake-tour",
+      "due": "2026-12-01",
+      "time": "10:00 AM",
+      "priority": "high",
+      "schoolId": "northwind",
+      "school": "Northwind Polytechnic",
+      "coach": "Sam Placeholder",
+      "action": "Confirm the sample campus tour",
+      "link": "https://example.com/sample-tour",
+      "status": "open"
+    },
+    {
+      "id": "fake-form",
+      "due": "",
+      "priority": "normal",
+      "schoolId": "lakeshore",
+      "school": "Lakeshore Institute",
+      "coach": "Jordan Sample",
+      "action": "Read the fake scholarship form",
+      "status": "open"
+    }
+  ],
   "schools": [
     {
       "id": "northwind",

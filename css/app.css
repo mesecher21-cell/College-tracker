@@ -473,6 +473,90 @@ input[type="password"], input[type="text"] {
   border-left: 4px solid var(--brass);
 }
 
+.todo-card h1,
+.todo-card h2 {
+  margin-bottom: 4px;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: -0.03em;
+  font-size: 1.7rem;
+}
+
+.todo-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 4px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.todo-check {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.todo-check input {
+  width: 22px;
+  height: 22px;
+  margin: 11px 0 0;
+}
+
+.todo-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-top: 8px;
+}
+
+.todo-action {
+  font-weight: 650;
+}
+
+.todo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.when.overdue {
+  color: var(--danger);
+  font-weight: 750;
+}
+
+.badge-high {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 16%, var(--card));
+  color: var(--danger);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+
+.todo-done {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.todo-done summary {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .primary:active { filter: none; }
 }

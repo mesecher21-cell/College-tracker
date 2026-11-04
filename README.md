@@ -101,6 +101,19 @@ profile.gpa             number
 profile.notes           string
 lastUpdated             YYYY-MM-DD
 upcoming[]              { date, title, school }
+todos[]                 optional. Check-offs on the phone are stored on the device, not in this file.
+  id                    string, stable and unique
+  due                   YYYY-MM-DD or ""
+  time                  optional, such as "10:00 AM"
+  priority              high | normal
+  schoolId              optional school id
+  school                display name
+  coach                 string
+  sport                 optional
+  action                string
+  link                  optional http(s) URL
+  status                open | done
+  doneDate              optional YYYY-MM-DD
 schools[]
   id                    lowercase slug, unique
   name                  string
@@ -121,4 +134,6 @@ schools[]
 
 `comms.channel` is `email`, `text`, `call`, `in-person`, `X DM`, or `other`. `comms.direction` is `in` (received) or `out` (sent). `upcoming.school` and each school `id` should match a school name or id so the app can open that school.
 
-On the list, each school shows its status, the next dated step (or the latest one, if every step is in the past), and the latest communication date. The school screen leads with status, offer, and next step, then the communications timeline, visits, application and scholarships, and contacts. Engineering notes show when that field is filled in.
+On the list, To-Do is first. Open items are counted in the heading. Overdue items come first, then high priority, then due date, and undated items last. Checking an item stores that choice in this browser until it is unchecked. Items already marked done in the file start in the Done section. Each school screen lists that school's open to-dos above the overview.
+
+Below To-Do, each school shows its status, the next dated step (or the latest one, if every step is in the past), and the latest communication date. The school screen then shows status, offer, and next step, then the communications timeline, visits, application and scholarships, and contacts. Engineering notes show when that field is filled in.

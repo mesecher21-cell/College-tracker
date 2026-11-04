@@ -2,6 +2,7 @@ import { decryptPayload } from "./crypto.js";
 
 const REMEMBER_KEY = "college-tracker.passcode.v1";
 const THEME_KEY = "college-tracker.theme";
+const TODO_KEY = "college-tracker.todos.v1";
 const STATUS_LABEL = {
   offer: "Offer",
   accepted: "Accepted",
@@ -89,6 +90,120 @@ function todayISO() {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function readTodoOverrides() {
+  try {
+    const parsed = JSON.parse(safeGet(TODO_KEY) || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function isTodoDone(todo) {
+  const overrides = readTodoOverrides();
+  if (Object.prototype.hasOwnProperty.call(overrides, todo.id)) return Boolean(overrides[todo.id]);
+  return todo.status === "done";
+}
+
+function setTodoDone(id, done) {
+  const overrides = readTodoOverrides();
+  overrides[id] = Boolean(done);
+  safeSet(TODO_KEY, JSON.stringify(overrides));
+}
+
+function isOverdue(todo) {
+  return Boolean(todo.due) && todo.due < todayISO() && !isTodoDone(todo);
+}
+
+function isSafeLink(value) {
+  if (typeof value !== "string" || value === "") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function sortedTodos(todos) {
+  const today = todayISO();
+  const rank = (todo) => {
+    const due = typeof todo.due === "string" ? todo.due : "";
+    const bucket = due ? (due < today ? 0 : 1) : 2;
+    const priority = todo.priority === "high" ? 0 : 1;
+    return [bucket, priority, due || "9999-99-99", String(todo.action || "")];
+  };
+  return (todos || []).slice().sort((a, b) => {
+    const left = rank(a);
+    const right = rank(b);
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] < right[index]) return -1;
+      if (left[index] > right[index]) return 1;
+    }
+    return 0;
+  });
+}
+
+function todoMatchesSchool(todo, school) {
+  if (todo.schoolId) return todo.schoolId === school.id;
+  return Boolean(todo.school) && todo.school === school.name;
+}
+
+function renderTodoRow(todo) {
+  const row = h("div", "todo-row");
+  const label = document.createElement("label");
+  label.className = "todo-check";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.dataset.todoId = todo.id;
+  box.checked = isTodoDone(todo);
+  box.setAttribute("aria-label", `${box.checked ? "Reopen" : "Mark done"}: ${todo.action || "to-do"}`);
+  label.append(box);
+  const body = h("div", "todo-body");
+  const whenText = [todo.due ? formatDate(todo.due) : "No date", todo.time].filter(Boolean).join(" · ");
+  body.append(h("p", isOverdue(todo) ? "when overdue" : "when", whenText));
+  const meta = h("p", "todo-meta");
+  if (todo.priority === "high") meta.append(h("span", "badge-high", "HIGH"));
+  const who = [todo.school, todo.coach, todo.sport].filter(Boolean).join(" · ");
+  if (who) meta.append(document.createTextNode(who));
+  if (meta.childNodes.length) body.append(meta);
+  body.append(h("p", "todo-action", todo.action || "To-do"));
+  if (isSafeLink(todo.link)) {
+    const link = document.createElement("a");
+    link.href = todo.link;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Open link";
+    body.append(link);
+  }
+  row.append(label, body);
+  return row;
+}
+
+function renderTodoBlock(todos, { heading = "h1", includeDone = true } = {}) {
+  const sorted = sortedTodos(todos);
+  const openItems = sorted.filter((todo) => !isTodoDone(todo));
+  const doneItems = sorted.filter((todo) => isTodoDone(todo));
+  const block = h("section", "card todo-card");
+  const title = document.createElement(heading);
+  title.append(document.createTextNode("To-Do"));
+  title.append(h("span", "count", ` ${openItems.length}`));
+  block.append(title);
+  if (!openItems.length) block.append(h("p", "empty", "No open to-dos."));
+  openItems.forEach((todo) => block.append(renderTodoRow(todo)));
+  if (includeDone && doneItems.length) {
+    const details = document.createElement("details");
+    details.className = "todo-done";
+    const summary = document.createElement("summary");
+    summary.textContent = `Done ${doneItems.length}`;
+    details.append(summary);
+    doneItems.forEach((todo) => details.append(renderTodoRow(todo)));
+    block.append(details);
+  }
+  return block;
 }
 
 function formatGpa(gpa) {
@@ -323,7 +438,7 @@ function renderList() {
   if (tracker.lastUpdated) profileCard.append(h("p", "small muted", `Updated ${formatDate(tracker.lastUpdated)}`));
   if (profile.notes) profileCard.append(h("p", null, profile.notes));
 
-  const nodes = [profileCard];
+  const nodes = [renderTodoBlock(tracker.todos), profileCard];
   const upcoming = (tracker.upcoming || []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
   if (upcoming.length) {
     const card = h("section", "card stack");
@@ -462,7 +577,10 @@ function renderDetail(school) {
   addFact(facts, "So far", done);
   overview.append(facts);
 
-  const nodes = [intro, overview];
+  const schoolTodos = (tracker.todos || []).filter((todo) => todoMatchesSchool(todo, school) && !isTodoDone(todo));
+  const nodes = [intro];
+  if (schoolTodos.length) nodes.push(renderTodoBlock(schoolTodos, { heading: "h2", includeDone: false }));
+  nodes.push(overview);
   if (school.engineeringNotes) {
     const note = h("section", "card callout stack");
     note.append(h("h2", null, "Engineering"), h("p", null, school.engineeringNotes));
@@ -661,6 +779,13 @@ app.addEventListener("click", (event) => {
   if (target.dataset.action === "theme") toggleTheme();
   else if (target.dataset.action === "lock") doLock();
   else if (target.dataset.action === "retry") boot();
+});
+
+app.addEventListener("change", (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || !input.dataset.todoId) return;
+  setTodoDone(input.dataset.todoId, input.checked);
+  render();
 });
 
 app.addEventListener("submit", (event) => {

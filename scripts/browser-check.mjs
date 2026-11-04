@@ -144,6 +144,28 @@ try {
   await page.click("#remember");
   await page.click("#unlock-submit");
   await page.waitForSelector('[data-screen="list"]');
+  const homeText = (await page.$eval("main", (node) => node.innerText)).toLowerCase();
+  assert(homeText.includes("to-do"), "home is missing the to-do list");
+  assert(homeText.includes("send the fake highlight film"), "home is missing the overdue to-do");
+  assert(homeText.startsWith("to-do") || homeText.includes("\nto-do"), "to-do is not the first section");
+  const firstTodo = await page.$eval(".todo-row", (node) => node.innerText.toLowerCase());
+  assert(firstTodo.includes("send the fake highlight film"), `first to-do was ${firstTodo}`);
+  assert(firstTodo.includes("high"), "first to-do is missing the high badge");
+  const overdueColor = await page.$eval(".when.overdue", (node) => getComputedStyle(node).color);
+  const overdueChannels = overdueColor.match(/\d+/g).map(Number);
+  assert(overdueChannels[0] > 120 && overdueChannels[1] < 80, `overdue color was ${overdueColor}`);
+  await page.screenshot({ path: path.join(outDir, "screenshot_todo.png") });
+  await page.click(".todo-row input");
+  await page.waitForSelector(".todo-done");
+  const savedTodo = await page.evaluate(() => localStorage.getItem("college-tracker.todos.v1"));
+  assert(savedTodo && savedTodo.includes("fake-highlight"), "check-off was not stored on the device");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector(".todo-done");
+  await page.$eval(".todo-done", (node) => {
+    node.open = true;
+  });
+  await page.click(".todo-done input");
+  assert(!(await page.$(".todo-done")), "unchecking did not return the item to the open list");
   const firstName = await page.$eval(".school-card h2", (node) => node.textContent);
   assert(firstName.includes("Northwind"), `first school was ${firstName}`);
   const listText = (await page.$eval("main", (node) => node.innerText)).toLowerCase();
@@ -153,11 +175,14 @@ try {
   assert(listText.includes("closed door college"), "list is missing a lower-priority school");
   const cardHeight = await page.$eval(".school-card", (node) => node.getBoundingClientRect().height);
   assert(cardHeight >= 44, `school card height ${cardHeight}`);
+  await page.$eval(".school-card", (node) => node.scrollIntoView({ block: "center" }));
   await page.screenshot({ path: path.join(outDir, "screenshot_school_list.png") });
 
   await page.click(".school-card");
   await page.waitForSelector('[data-screen="detail"]');
   const detailText = (await page.$eval("main", (node) => node.innerText)).toLowerCase();
+  assert(detailText.includes("to-do"), "detail is missing the school to-dos");
+  assert(detailText.includes("send the fake highlight film"), "detail is missing the open to-do");
   assert(detailText.includes("overview"), "detail is missing the overview");
   assert(detailText.includes("offer"), "detail is missing the offer");
   assert(detailText.includes("sample campus tour"), "detail is missing the next step");

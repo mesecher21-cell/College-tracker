@@ -11,6 +11,8 @@ const STATUSES = new Set([
 
 const CHANNELS = new Set(["email", "text", "call", "in-person", "X DM", "other"]);
 const DIRECTIONS = new Set(["in", "out"]);
+const TODO_PRIORITIES = new Set(["high", "normal"]);
+const TODO_STATUSES = new Set(["open", "done"]);
 const ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function isObject(value) {
@@ -69,9 +71,38 @@ function requireStringArray(value, path, errors) {
   value.forEach((item, index) => requireString(item, `${path}[${index}]`, errors));
 }
 
+function knownKeys(value, required, optional, path, errors) {
+  if (!isObject(value)) {
+    errors.push(`${path} must be an object`);
+    return false;
+  }
+  const allowed = new Set([...required, ...optional]);
+  for (const key of required) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) errors.push(`${path}.${key} is required`);
+  }
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) errors.push(`${path}.${key} is not a known field`);
+  }
+  return true;
+}
+
+function optionalString(value, path, errors) {
+  if (value === undefined) return;
+  requireString(value, path, errors, { allowEmpty: true });
+}
+
+function isHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function validateTracker(data) {
   const errors = [];
-  if (!exactKeys(data, ["profile", "lastUpdated", "upcoming", "schools"], "tracker", errors)) return errors;
+  if (!knownKeys(data, ["profile", "lastUpdated", "upcoming", "schools"], ["todos"], "tracker", errors)) return errors;
 
   if (exactKeys(data.profile, ["name", "classYear", "gpa", "notes"], "profile", errors)) {
     requireString(data.profile.name, "profile.name", errors);
@@ -100,6 +131,7 @@ export function validateTracker(data) {
   if (!Array.isArray(data.schools)) errors.push("schools must be an array");
   else {
     const ids = new Set();
+    const schoolIds = ids;
     data.schools.forEach((school, index) => {
       const path = `schools[${index}]`;
       if (!exactKeys(school, [
@@ -220,6 +252,42 @@ export function validateTracker(data) {
         });
       }
     });
+
+    if (Object.prototype.hasOwnProperty.call(data, "todos")) {
+      if (!Array.isArray(data.todos)) errors.push("todos must be an array");
+      else {
+        const todoIds = new Set();
+        data.todos.forEach((todo, index) => {
+          const path = `todos[${index}]`;
+          if (!knownKeys(todo, ["id", "due", "priority", "school", "coach", "action", "status"], ["time", "schoolId", "sport", "link", "doneDate"], path, errors)) return;
+          if (requireString(todo.id, `${path}.id`, errors)) {
+            if (todoIds.has(todo.id)) errors.push(`${path}.id is duplicated`);
+            todoIds.add(todo.id);
+          }
+          requireDate(todo.due, `${path}.due`, errors, { allowEmpty: true });
+          optionalString(todo.time, `${path}.time`, errors);
+          if (typeof todo.priority !== "string" || !TODO_PRIORITIES.has(todo.priority)) {
+            errors.push(`${path}.priority must be high or normal`);
+          }
+          if (todo.schoolId !== undefined) {
+            if (typeof todo.schoolId !== "string") errors.push(`${path}.schoolId must be a string`);
+            else if (todo.schoolId !== "" && !schoolIds.has(todo.schoolId)) errors.push(`${path}.schoolId does not match a school`);
+          }
+          requireString(todo.school, `${path}.school`, errors, { allowEmpty: true });
+          requireString(todo.coach, `${path}.coach`, errors, { allowEmpty: true });
+          optionalString(todo.sport, `${path}.sport`, errors);
+          requireString(todo.action, `${path}.action`, errors);
+          if (todo.link !== undefined) {
+            if (typeof todo.link !== "string") errors.push(`${path}.link must be a string`);
+            else if (todo.link !== "" && !isHttpUrl(todo.link)) errors.push(`${path}.link must be an http or https URL`);
+          }
+          if (typeof todo.status !== "string" || !TODO_STATUSES.has(todo.status)) {
+            errors.push(`${path}.status must be open or done`);
+          }
+          if (todo.doneDate !== undefined) requireDate(todo.doneDate, `${path}.doneDate`, errors, { allowEmpty: true });
+        });
+      }
+    }
   }
 
   return errors;
