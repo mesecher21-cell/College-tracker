@@ -3,6 +3,7 @@ import { decryptPayload } from "./crypto.js";
 const REMEMBER_KEY = "college-tracker.passcode.v1";
 const THEME_KEY = "college-tracker.theme";
 const TODO_KEY = "college-tracker.todos.v1";
+const PENDING_KEY = "college-tracker.todo-pending.v1";
 const STATUS_LABEL = {
   offer: "Offer",
   accepted: "Accepted",
@@ -32,7 +33,16 @@ let unlockError = "";
 let encPayload = null;
 let tracker = null;
 let pendingPasscode = "";
+let sessionPasscode = "";
+let sessionId = 0;
 let booting = false;
+let memoryQueue = null;
+let flushRunning = false;
+let flushRequested = false;
+let syncFailed = false;
+let republishTimer = 0;
+let republishStep = 0;
+let reloadGeneration = 0;
 
 function h(tag, className, text) {
   const node = document.createElement(tag);
@@ -92,7 +102,19 @@ function todayISO() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
-function readTodoOverrides() {
+// Done events use the Chicago calendar date, not the phone's local zone.
+function chicagoToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const value = (type) => parts.find((part) => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+function readLegacyOverrides() {
   try {
     const parsed = JSON.parse(safeGet(TODO_KEY) || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -102,16 +124,285 @@ function readTodoOverrides() {
   }
 }
 
-function isTodoDone(todo) {
-  const overrides = readTodoOverrides();
-  if (Object.prototype.hasOwnProperty.call(overrides, todo.id)) return Boolean(overrides[todo.id]);
-  return todo.status === "done";
+function cloneQueue(queue) {
+  return JSON.parse(JSON.stringify(queue));
 }
 
-function setTodoDone(id, done) {
-  const overrides = readTodoOverrides();
-  overrides[id] = Boolean(done);
-  safeSet(TODO_KEY, JSON.stringify(overrides));
+function normalizeQueue(parsed) {
+  const queue = {};
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return queue;
+  for (const [id, entry] of Object.entries(parsed)) {
+    if (!id || !entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const doneDate = typeof entry.doneDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(entry.doneDate)
+      ? entry.doneDate
+      : chicagoToday();
+    queue[id] = {
+      todoId: id,
+      schoolId: typeof entry.schoolId === "string" ? entry.schoolId : "",
+      action: typeof entry.action === "string" ? entry.action : "",
+      doneDate,
+      remove: false,
+      posted: entry.posted === true
+    };
+  }
+  return queue;
+}
+
+function readQueue() {
+  if (memoryQueue) return cloneQueue(memoryQueue);
+  try {
+    memoryQueue = normalizeQueue(JSON.parse(safeGet(PENDING_KEY) || "{}"));
+  } catch {
+    memoryQueue = {};
+  }
+  return cloneQueue(memoryQueue);
+}
+
+function writeQueue(queue) {
+  memoryQueue = normalizeQueue(queue);
+  if (!Object.keys(memoryQueue).length) {
+    safeRemove(PENDING_KEY);
+    return true;
+  }
+  return safeSet(PENDING_KEY, JSON.stringify(memoryQueue));
+}
+
+function syncSettings() {
+  const sync = tracker && typeof tracker.sync === "object" && tracker.sync && !Array.isArray(tracker.sync)
+    ? tracker.sync
+    : null;
+  const url = sync && typeof sync.doneWebhook === "string" ? sync.doneWebhook.trim() : "";
+  const header = sync && typeof sync.doneWebhookHeader === "string" ? sync.doneWebhookHeader.trim() : "";
+  return {
+    url: isSafeLink(url) ? url : "",
+    header
+  };
+}
+
+function entryFromTodo(todo) {
+  return {
+    todoId: todo.id,
+    schoolId: typeof todo.schoolId === "string" ? todo.schoolId : "",
+    action: typeof todo.action === "string" ? todo.action : "",
+    doneDate: chicagoToday(),
+    remove: false,
+    posted: false
+  };
+}
+
+function eventBody(entry) {
+  return {
+    todoId: entry.todoId,
+    schoolId: entry.schoolId || "",
+    action: entry.action || "",
+    doneDate: entry.doneDate,
+    remove: false
+  };
+}
+
+function isFileDone(todo) {
+  return todo?.status === "done";
+}
+
+function isQueued(todo) {
+  return Boolean(todo?.id) && Object.prototype.hasOwnProperty.call(readQueue(), todo.id);
+}
+
+// The published file wins. The queue only hides an item until that file catches up.
+function isTodoDone(todo) {
+  if (isFileDone(todo)) return true;
+  return isQueued(todo);
+}
+
+function syncNote() {
+  const waiting = Object.values(readQueue()).some((entry) => !entry.posted);
+  if (!waiting) return "";
+  if (!syncSettings().url) return "Sync isn't configured yet. Checked to-dos stay hidden on this phone.";
+  if (!syncFailed) return "";
+  return "Couldn't sync yet. This phone will retry when it's online.";
+}
+
+function todosById() {
+  return new Map((tracker?.todos || []).map((todo) => [todo.id, todo]));
+}
+
+function adoptLegacyOverrides() {
+  const overrides = readLegacyOverrides();
+  const ids = Object.keys(overrides);
+  if (!ids.length || !tracker) return;
+  const todos = todosById();
+  const queue = readQueue();
+  for (const id of ids) {
+    const todo = todos.get(id);
+    if (overrides[id] === true && todo && todo.status !== "done" && !queue[id]) queue[id] = entryFromTodo(todo);
+  }
+  if (writeQueue(queue)) safeRemove(TODO_KEY);
+}
+
+function reconcilePending() {
+  if (!tracker) return;
+  const todos = todosById();
+  const queue = readQueue();
+  let changed = false;
+  for (const id of Object.keys(queue)) {
+    const todo = todos.get(id);
+    if (!todo || todo.status === "done") {
+      delete queue[id];
+      changed = true;
+    }
+  }
+  if (changed) writeQueue(queue);
+  const overrides = readLegacyOverrides();
+  let legacyChanged = false;
+  for (const id of Object.keys(overrides)) {
+    const todo = todos.get(id);
+    if (!todo || todo.status === "done") {
+      delete overrides[id];
+      legacyChanged = true;
+    }
+  }
+  if (!legacyChanged) return;
+  if (Object.keys(overrides).length) safeSet(TODO_KEY, JSON.stringify(overrides));
+  else safeRemove(TODO_KEY);
+}
+
+function hasPostedPending() {
+  return Object.values(readQueue()).some((entry) => entry.posted);
+}
+
+function clearRepublishTimer() {
+  if (!republishTimer) return;
+  clearTimeout(republishTimer);
+  republishTimer = 0;
+}
+
+async function reloadSharedTracker() {
+  if (!sessionPasscode || !tracker) return false;
+  const passcode = sessionPasscode;
+  const session = sessionId;
+  const generation = ++reloadGeneration;
+  try {
+    const result = await fetchEnc();
+    if (generation !== reloadGeneration || session !== sessionId || passcode !== sessionPasscode || !tracker) return false;
+    if (result.missing || !result.payload) return false;
+    const data = await decryptPayload(result.payload, passcode);
+    if (generation !== reloadGeneration || session !== sessionId || passcode !== sessionPasscode || !tracker) return false;
+    if (!data?.profile || !Array.isArray(data.schools)) return false;
+    encPayload = result.payload;
+    tracker = data;
+    adoptLegacyOverrides();
+    reconcilePending();
+    if (!hasPostedPending()) {
+      republishStep = 0;
+      clearRepublishTimer();
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function scheduleRepublishCheck() {
+  if (republishTimer || !hasPostedPending()) return;
+  const delays = [3000, 10000, 20000, 30000];
+  const delay = delays[Math.min(republishStep, delays.length - 1)];
+  republishTimer = window.setTimeout(async () => {
+    republishTimer = 0;
+    if (!tracker || !sessionPasscode) return;
+    if (document.visibilityState === "hidden") {
+      scheduleRepublishCheck();
+      return;
+    }
+    republishStep += 1;
+    const updated = await reloadSharedTracker();
+    if (!tracker || !sessionPasscode) return;
+    if (updated) render();
+    if (hasPostedPending() && republishStep < 12) scheduleRepublishCheck();
+    else if (!hasPostedPending()) republishStep = 0;
+  }, delay);
+}
+
+async function postDone(entry) {
+  const { url, header } = syncSettings();
+  if (!url) return false;
+  const headers = { "Content-Type": "application/json" };
+  if (header) headers.Authorization = header;
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(eventBody(entry)),
+    cache: "no-store",
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+    mode: "cors"
+  });
+  if (!response.ok) throw new Error(String(response.status));
+  return true;
+}
+
+async function flushOnce() {
+  if (!tracker) return;
+  const pending = Object.values(readQueue()).filter((entry) => !entry.posted);
+  if (!pending.length || !syncSettings().url) {
+    if (hasPostedPending()) scheduleRepublishCheck();
+    return;
+  }
+  let failed = false;
+  for (const entry of pending) {
+    const current = readQueue()[entry.todoId];
+    if (!current || current.posted) continue;
+    try {
+      const posted = await postDone(current);
+      if (!posted) {
+        failed = true;
+        continue;
+      }
+      const latest = readQueue();
+      if (latest[entry.todoId] && !latest[entry.todoId].posted) {
+        latest[entry.todoId] = { ...latest[entry.todoId], posted: true };
+        writeQueue(latest);
+      }
+    } catch {
+      failed = true;
+    }
+  }
+  syncFailed = failed && Object.values(readQueue()).some((entry) => !entry.posted);
+  if (hasPostedPending()) {
+    scheduleRepublishCheck();
+    await reloadSharedTracker();
+  }
+}
+
+async function flushQueue() {
+  if (!tracker) return;
+  flushRequested = true;
+  if (flushRunning) return;
+  flushRunning = true;
+  const session = sessionId;
+  try {
+    let shouldRender = false;
+    while (flushRequested) {
+      flushRequested = false;
+      if (Object.keys(readQueue()).length) shouldRender = true;
+      await flushOnce();
+    }
+    if (shouldRender && tracker && session === sessionId) render();
+  } finally {
+    flushRunning = false;
+    if (flushRequested && tracker) void flushQueue();
+  }
+}
+
+function markTodoDone(id) {
+  const todo = (tracker?.todos || []).find((item) => item.id === id);
+  if (!todo || todo.status === "done") return;
+  const queue = readQueue();
+  if (!queue[id]) {
+    queue[id] = entryFromTodo(todo);
+    writeQueue(queue);
+  }
+  render();
+  void flushQueue();
 }
 
 function isOverdue(todo) {
@@ -152,15 +443,16 @@ function todoMatchesSchool(todo, school) {
   return Boolean(todo.school) && todo.school === school.name;
 }
 
-function renderTodoRow(todo) {
+function renderTodoRow(todo, { locked = false } = {}) {
   const row = h("div", "todo-row");
   const label = document.createElement("label");
   label.className = "todo-check";
   const box = document.createElement("input");
   box.type = "checkbox";
   box.dataset.todoId = todo.id;
-  box.checked = isTodoDone(todo);
-  box.setAttribute("aria-label", `${box.checked ? "Reopen" : "Mark done"}: ${todo.action || "to-do"}`);
+  box.checked = locked || isTodoDone(todo);
+  box.disabled = locked;
+  box.setAttribute("aria-label", `${box.checked ? "Done" : "Mark done"}: ${todo.action || "to-do"}`);
   label.append(box);
   const body = h("div", "todo-body");
   const whenText = [todo.due ? formatDate(todo.due) : "No date", todo.time].filter(Boolean).join(" · ");
@@ -183,10 +475,18 @@ function renderTodoRow(todo) {
   return row;
 }
 
+function appendSyncNote(block) {
+  const note = syncNote();
+  if (!note) return;
+  const line = h("p", "small muted sync-note", note);
+  line.dataset.syncNote = "true";
+  block.append(line);
+}
+
 function renderTodoBlock(todos, { heading = "h1", includeDone = true } = {}) {
   const sorted = sortedTodos(todos);
   const openItems = sorted.filter((todo) => !isTodoDone(todo));
-  const doneItems = sorted.filter((todo) => isTodoDone(todo));
+  const doneItems = includeDone ? sorted.filter((todo) => isFileDone(todo)) : [];
   const block = h("section", "card todo-card");
   const title = document.createElement(heading);
   title.append(document.createTextNode("To-Do"));
@@ -194,15 +494,16 @@ function renderTodoBlock(todos, { heading = "h1", includeDone = true } = {}) {
   block.append(title);
   if (!openItems.length) block.append(h("p", "empty", "No open to-dos."));
   openItems.forEach((todo) => block.append(renderTodoRow(todo)));
-  if (includeDone && doneItems.length) {
+  if (doneItems.length) {
     const details = document.createElement("details");
     details.className = "todo-done";
     const summary = document.createElement("summary");
     summary.textContent = `Done ${doneItems.length}`;
     details.append(summary);
-    doneItems.forEach((todo) => details.append(renderTodoRow(todo)));
+    doneItems.forEach((todo) => details.append(renderTodoRow(todo, { locked: true })));
     block.append(details);
   }
+  appendSyncNote(block);
   return block;
 }
 
@@ -415,7 +716,7 @@ function renderLock() {
     error.setAttribute("role", "alert");
     wrap.append(error);
   }
-  wrap.append(h("p", "small muted", "The passcode stays on this phone. Remember keeps it in this browser until you tap Lock. Notes are decrypted here and are not sent to a server."));
+  wrap.append(h("p", "small muted", "The passcode stays on this phone. Remember keeps it in this browser until you tap Lock. Notes are decrypted here. Checking a to-do done can send that one item to the sync address saved in the tracker."));
   wrap.append(h("p", "small muted", "To install it, use the browser Share menu and choose Add to Home Screen."));
   renderScreen("lock", { nodes: [wrap] });
   if (unlockError) input.focus();
@@ -578,8 +879,14 @@ function renderDetail(school) {
   overview.append(facts);
 
   const schoolTodos = (tracker.todos || []).filter((todo) => todoMatchesSchool(todo, school) && !isTodoDone(todo));
+  const pendingForSchool = (tracker.todos || []).filter((todo) => todoMatchesSchool(todo, school) && isQueued(todo) && !isFileDone(todo));
   const nodes = [intro];
   if (schoolTodos.length) nodes.push(renderTodoBlock(schoolTodos, { heading: "h2", includeDone: false }));
+  else if (pendingForSchool.length && syncNote()) {
+    const noteCard = h("section", "card todo-card");
+    appendSyncNote(noteCard);
+    nodes.push(noteCard);
+  }
   nodes.push(overview);
   if (school.engineeringNotes) {
     const note = h("section", "card callout stack");
@@ -708,8 +1015,12 @@ async function tryUnlock(passcode, { remember = false, auto = false } = {}) {
       unlockError = "";
     }
     pendingPasscode = "";
+    sessionPasscode = passcode;
     tracker = data;
+    adoptLegacyOverrides();
+    reconcilePending();
     render();
+    void flushQueue();
   } catch (err) {
     tracker = null;
     pendingPasscode = auto ? "" : passcode;
@@ -725,9 +1036,12 @@ async function tryUnlock(passcode, { remember = false, auto = false } = {}) {
 async function boot() {
   if (booting) return;
   booting = true;
+  sessionId += 1;
   loadState = "loading";
   tracker = null;
+  sessionPasscode = "";
   unlockError = "";
+  clearRepublishTimer();
   render();
   try {
     const result = await fetchEnc();
@@ -765,9 +1079,13 @@ function toggleTheme() {
 }
 
 function doLock() {
+  sessionId += 1;
   tracker = null;
+  sessionPasscode = "";
   pendingPasscode = "";
   unlockError = "";
+  clearRepublishTimer();
+  republishStep = 0;
   safeRemove(REMEMBER_KEY);
   if (location.hash && location.hash !== "#/") location.hash = "#/";
   boot();
@@ -783,9 +1101,9 @@ app.addEventListener("click", (event) => {
 
 app.addEventListener("change", (event) => {
   const input = event.target;
-  if (!(input instanceof HTMLInputElement) || !input.dataset.todoId) return;
-  setTodoDone(input.dataset.todoId, input.checked);
-  render();
+  if (!(input instanceof HTMLInputElement) || input.type !== "checkbox" || !input.dataset.todoId) return;
+  if (!input.checked) return;
+  markTodoDone(input.dataset.todoId);
 });
 
 app.addEventListener("submit", (event) => {
@@ -804,6 +1122,21 @@ app.addEventListener("submit", (event) => {
 
 window.addEventListener("hashchange", () => {
   if (!booting) render();
+});
+
+window.addEventListener("online", () => {
+  if (tracker) void flushQueue();
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !tracker || !sessionPasscode) return;
+  const session = sessionId;
+  void (async () => {
+    await flushQueue();
+    if (session !== sessionId || !tracker || !sessionPasscode || !Object.keys(readQueue()).length) return;
+    const updated = await reloadSharedTracker();
+    if (updated && session === sessionId && tracker) render();
+  })();
 });
 
 applyTheme(safeGet(THEME_KEY));

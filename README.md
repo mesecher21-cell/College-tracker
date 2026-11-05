@@ -32,7 +32,7 @@ This repository is public. Do not commit plaintext recruiting notes or the passc
 
 Until `data/tracker.enc.json` is published, the app shows **No data yet**.
 
-The browser downloads the encrypted file with a cache-busting query and `cache: "no-store"`. The service worker is network-first, so the next time the app is opened online it picks up a newly published file. A remembered passcode stays in this browser’s `localStorage` until **Lock** is tapped. Decrypting happens on the device with WebCrypto. Nothing is uploaded.
+The browser downloads the encrypted file with a cache-busting query and `cache: "no-store"`. The service worker is network-first, so the next time the app is opened online it picks up a newly published file. A remembered passcode stays in this browser’s `localStorage` until **Lock** is tapped. Decrypting happens on the device with WebCrypto. The tracker file itself is not uploaded. Checking a to-do Done can POST that one item to the webhook stored in the decrypted file, as described below.
 
 ## Update the notes
 
@@ -101,7 +101,7 @@ profile.gpa             number
 profile.notes           string
 lastUpdated             YYYY-MM-DD
 upcoming[]              { date, title, school }
-todos[]                 optional. Check-offs on the phone are stored on the device, not in this file.
+todos[]                 optional. Checking Done posts to sync.doneWebhook. This file remains the source of truth.
   id                    string, stable and unique
   due                   YYYY-MM-DD or ""
   time                  optional, such as "10:00 AM"
@@ -130,10 +130,44 @@ schools[]
   engineeringNotes      string
   nextSteps[]           { date, text }
   comms[]               { date, channel, direction, with, summary }
+sync                    optional. Omit it until Done sync is set up. The sample file omits it.
+  doneWebhook           string. An http or https URL, or "" when sync is not configured yet.
+  doneWebhookHeader     optional string. Sent as the Authorization header when it is not empty. May be "".
 ```
 
 `comms.channel` is `email`, `text`, `call`, `in-person`, `X DM`, or `other`. `comms.direction` is `in` (received) or `out` (sent). `upcoming.school` and each school `id` should match a school name or id so the app can open that school.
 
-On the list, To-Do is first. Open items are counted in the heading. Overdue items come first, then high priority, then due date, and undated items last. Checking an item stores that choice in this browser until it is unchecked. Items already marked done in the file start in the Done section. Each school screen lists that school's open to-dos above the overview.
+On the list, To-Do is first. Open items are counted in the heading. Overdue items come first, then high priority, then due date, and undated items last. Checking Done removes that item from the open list immediately. Items the published file already marks `done` stay out of the open list and are listed in a Done section, because that status came from the file. A device check-off cannot reopen them. Each school screen lists that school's open to-dos above the overview and drops one as soon as it is marked done.
+
+## Marking a to-do done
+
+The webhook address is not part of the app source. Put it only in the plaintext tracker, then encrypt and publish `data/tracker.enc.json`. Do not commit the real URL or header.
+
+```json
+"sync": {
+  "doneWebhook": "",
+  "doneWebhookHeader": ""
+}
+```
+
+`doneWebhook` may be `""` when sync is not ready. A non-empty value must be an http or https URL. On the public https site, use an https webhook; browsers block an http POST from an https page. The webhook has to accept a JSON POST from this origin, including the CORS preflight.
+
+Checking **Done** hides the item at once and POSTs:
+
+```json
+{
+  "todoId": "the-todo-id",
+  "schoolId": "school-id-or-empty",
+  "action": "the to-do text",
+  "doneDate": "YYYY-MM-DD",
+  "remove": false
+}
+```
+
+`schoolId` and `action` come from the to-do (`schoolId` is `""` when the to-do has none). `doneDate` is today's date in America/Chicago. `remove` is always false. When `doneWebhookHeader` is a non-empty string, that exact value is the `Authorization` header. Otherwise the request is `Content-Type: application/json` only.
+
+If `sync.doneWebhook` is missing or empty, the phone shows a short note that sync isn't configured yet and still hides the item. If the phone is offline or the POST fails, the item stays hidden and a small pending queue in this browser retries on the next load and when connectivity returns. The queue is not the long-term record.
+
+The shared record is the republished encrypted file. After a successful POST, and again when the app returns to the foreground, the phone reloads `data/tracker.enc.json`. When that file has the to-do at `status: "done"`, or the id is gone, the phone drops the queue entry and any older on-device check-off for that id. The same republish updates the matching school on the home list (status, next step, and last contact). Until the file catches up, the open list keeps the item hidden, but a newly checked item is not parked in the Done section.
 
 Below To-Do, each school shows its status, the next dated step (or the latest one, if every step is in the past), and the latest communication date. The school screen then shows status, offer, and next step, then the communications timeline, visits, application and scholarships, and contacts. Engineering notes show when that field is filled in.

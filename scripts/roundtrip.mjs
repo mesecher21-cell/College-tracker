@@ -28,6 +28,38 @@ const example = JSON.parse(original.toString("utf8"));
 const errors = validateTracker(example);
 if (errors.length) fail(errors.join("\n"));
 
+function assertValid(data, label) {
+  const found = validateTracker(data);
+  if (found.length) fail(`${label}:\n${found.join("\n")}`);
+}
+
+function assertInvalid(data, label) {
+  if (!validateTracker(data).length) fail(`${label} was accepted`);
+}
+
+assertValid({ ...example, sync: { doneWebhook: "https://example.com/hooks/done" } }, "doneWebhook without a header");
+assertValid({ ...example, sync: { doneWebhook: "" } }, "empty doneWebhook");
+assertValid({
+  ...example,
+  sync: { doneWebhook: "https://example.com/hooks/done", doneWebhookHeader: "" }
+}, "empty doneWebhookHeader");
+assertValid({
+  ...example,
+  sync: { doneWebhook: "http://127.0.0.1:9/hooks/done", doneWebhookHeader: "Bearer example" }
+}, "http doneWebhook");
+assertInvalid({ ...example, sync: { doneWebhook: "ftp://example.com/hooks/done" } }, "non-http doneWebhook");
+assertInvalid({ ...example, sync: { doneWebhook: "https://example.com/hooks/done", token: "secret" } }, "unknown sync field");
+assertInvalid({ ...example, sync: { doneWebhookHeader: "Bearer example" } }, "sync missing doneWebhook");
+assertInvalid({ ...example, sync: { doneWebhook: "https://example.com/hooks/done", doneWebhookHeader: 1 } }, "non-string header");
+assertInvalid({ ...example, sync: "https://example.com/hooks/done" }, "sync is not an object");
+
+const appSource = await readFile(path.join(here, "..", "js", "app.js"), "utf8");
+const indexSource = await readFile(path.join(here, "..", "index.html"), "utf8");
+const cssSource = await readFile(path.join(here, "..", "css", "app.css"), "utf8");
+const bundled = `${appSource}\n${indexSource}\n${cssSource}`;
+if (/doneWebhook"\s*:\s*"https?:\/\//.test(bundled)) fail("a webhook URL is committed in the app source");
+if (/Bearer\s+\S+/.test(bundled)) fail("a webhook header is committed in the app source");
+
 const passcode = `throwaway-${crypto.randomUUID()}`;
 const dir = await mkdtemp(path.join(tmpdir(), "college-tracker-"));
 const encPath = path.join(dir, "tracker.enc.json");

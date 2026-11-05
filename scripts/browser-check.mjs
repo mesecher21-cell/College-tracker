@@ -33,10 +33,63 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+const hooks = [];
+let failPosts = false;
+
+function chicagoToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const value = (type) => parts.find((part) => part.type === type)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+async function waitForHook(predicate, timeout = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const found = hooks.find(predicate);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  const summary = hooks.map((hook) => `${hook.status} ${hook.body?.todoId || "?"}`).join(", ");
+  throw new Error(`webhook timeout (${summary || "no requests"})`);
+}
+
 function startServer(siteRoot) {
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, "http://127.0.0.1");
+      if (url.pathname === "/hooks/done" && (request.method === "POST" || request.method === "OPTIONS")) {
+        if (request.method === "OPTIONS") {
+          response.writeHead(204, {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "authorization, content-type"
+          }).end();
+          return;
+        }
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const raw = Buffer.concat(chunks).toString("utf8");
+        let body;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          body = { raw };
+        }
+        const status = failPosts ? 500 : 204;
+        hooks.push({
+          body,
+          authorization: request.headers.authorization || "",
+          contentType: request.headers["content-type"] || "",
+          status
+        });
+        response.writeHead(status).end(status === 204 ? "" : "nope");
+        return;
+      }
       let pathname = decodeURIComponent(url.pathname);
       if (pathname.endsWith("/")) pathname += "index.html";
       const relative = pathname.replace(/^\/+/, "");
@@ -155,17 +208,6 @@ try {
   const overdueChannels = overdueColor.match(/\d+/g).map(Number);
   assert(overdueChannels[0] > 120 && overdueChannels[1] < 80, `overdue color was ${overdueColor}`);
   await page.screenshot({ path: path.join(outDir, "screenshot_todo.png") });
-  await page.click(".todo-row input");
-  await page.waitForSelector(".todo-done");
-  const savedTodo = await page.evaluate(() => localStorage.getItem("college-tracker.todos.v1"));
-  assert(savedTodo && savedTodo.includes("fake-highlight"), "check-off was not stored on the device");
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".todo-done");
-  await page.$eval(".todo-done", (node) => {
-    node.open = true;
-  });
-  await page.click(".todo-done input");
-  assert(!(await page.$(".todo-done")), "unchecking did not return the item to the open list");
   const firstName = await page.$eval(".school-card h2", (node) => node.textContent);
   assert(firstName.includes("Northwind"), `first school was ${firstName}`);
   const listText = (await page.$eval("main", (node) => node.innerText)).toLowerCase();
@@ -193,6 +235,207 @@ try {
   assert(detailText.includes("sam placeholder"), "detail is missing the contact");
   await page.screenshot({ path: path.join(outDir, "screenshot_school_detail.png") });
 
+  async function publishTracker(data) {
+    const plainPath = path.join(tmpdir(), `college-tracker-plain-${crypto.randomUUID()}.json`);
+    await writeFile(plainPath, `${JSON.stringify(data)}\n`);
+    try {
+      await encryptFile(plainPath, path.join(site, "data", "tracker.enc.json"), passcode);
+    } finally {
+      await rm(plainPath, { force: true });
+    }
+  }
+
+  async function openActions() {
+    return page.$$eval(".todo-card > .todo-row .todo-action", (nodes) => nodes.map((node) => node.textContent.toLowerCase()).join("\n"));
+  }
+
+  async function pendingQueue() {
+    return page.evaluate(() => JSON.parse(localStorage.getItem("college-tracker.todo-pending.v1") || "{}"));
+  }
+
+  async function settle() {
+    await page.waitForNetworkIdle({ idleTime: 200, timeout: 15000 });
+  }
+
+  async function checkTodo(id) {
+    await settle();
+    const selector = `input[data-todo-id="${id}"]`;
+    await page.waitForSelector(selector);
+    await page.$eval(selector, (node) => node.click());
+  }
+
+  await page.click('input[data-todo-id="fake-highlight"]');
+  await page.waitForFunction(() => !document.querySelector('input[data-todo-id="fake-highlight"]'));
+  const detailAfterDone = (await page.$eval("main", (node) => node.innerText)).toLowerCase();
+  assert(!detailAfterDone.includes("send the fake highlight film"), "school detail kept a checked to-do");
+  assert(detailAfterDone.includes("confirm the sample campus tour"), "school detail dropped a different open to-do");
+  const detailCount = await page.$eval(".todo-card .count", (node) => node.textContent.trim());
+  assert(detailCount === "1", `school open count was ${detailCount}`);
+  const unconfigured = await page.$eval("[data-sync-note]", (node) => ({
+    text: node.textContent,
+    role: node.getAttribute("role")
+  }));
+  assert(unconfigured.text.includes("isn't configured"), `sync note was ${unconfigured.text}`);
+  assert(unconfigured.role !== "alert", "sync note used an alert");
+  assert(!unconfigured.text.includes("http"), "sync note included a URL");
+  assert(!(await page.$(".todo-done")), "checking Done parked the item in the Done section");
+  await page.click('a[href="#/"]');
+  await page.waitForSelector('[data-screen="list"]');
+  const hiddenAtHome = await openActions();
+  assert(!hiddenAtHome.includes("send the fake highlight film"), "home kept the checked to-do");
+  assert(hiddenAtHome.includes("confirm the sample campus tour"), "home hid a different to-do");
+  const homeCount = await page.$eval(".todo-card h1 .count", (node) => node.textContent.trim());
+  assert(homeCount === "2", `home open count was ${homeCount}`);
+  const queued = await pendingQueue();
+  assert(queued["fake-highlight"]?.schoolId === "northwind", "pending queue missed the school");
+  assert(queued["fake-highlight"]?.action === "Send the fake highlight film", "pending queue missed the action");
+  assert(queued["fake-highlight"]?.remove === false, "pending queue changed remove");
+  assert(queued["fake-highlight"]?.posted === false, "unconfigured item was marked posted");
+  assert(queued["fake-highlight"]?.doneDate === chicagoToday(), `doneDate was ${queued["fake-highlight"]?.doneDate}`);
+  const queuedRaw = await page.evaluate(() => localStorage.getItem("college-tracker.todo-pending.v1") || "");
+  assert(!queuedRaw.includes("http"), "pending queue stored a webhook URL");
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-screen="list"]');
+  const hiddenAfterReload = await openActions();
+  assert(!hiddenAfterReload.includes("send the fake highlight film"), "reload showed the unsent to-do again");
+  assert((await page.$eval("[data-sync-note]", (node) => node.textContent)).includes("isn't configured"));
+
+  const example = JSON.parse(await readFile(path.join(root, "data", "tracker.example.json"), "utf8"));
+  const configured = structuredClone(example);
+  configured.sync = {
+    doneWebhook: `http://127.0.0.1:${port}/hooks/done`,
+    doneWebhookHeader: "Bearer test-token"
+  };
+  configured.todos.push({
+    id: "fake-no-school",
+    due: "",
+    priority: "normal",
+    school: "",
+    coach: "",
+    action: "Sample task with no school",
+    status: "open"
+  });
+  await publishTracker(configured);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-screen="list"]');
+  const highlightHook = await waitForHook((hook) => hook.body?.todoId === "fake-highlight" && hook.status === 204);
+  assert(highlightHook.authorization === "Bearer test-token", "webhook Authorization header was missing");
+  assert(highlightHook.contentType.toLowerCase().includes("application/json"), `content type was ${highlightHook.contentType}`);
+  assert(JSON.stringify(Object.keys(highlightHook.body)) === JSON.stringify(["todoId", "schoolId", "action", "doneDate", "remove"]));
+  assert(highlightHook.body.schoolId === "northwind");
+  assert(highlightHook.body.action === "Send the fake highlight film");
+  assert(highlightHook.body.doneDate === chicagoToday());
+  assert(highlightHook.body.remove === false);
+  await page.waitForFunction(() => {
+    const queue = JSON.parse(localStorage.getItem("college-tracker.todo-pending.v1") || "{}");
+    return queue["fake-highlight"]?.posted === true && !document.querySelector("[data-sync-note]");
+  });
+  const configuredHtml = await page.content();
+  assert(!configuredHtml.includes("Bearer test-token"), "webhook header was written into the page");
+  assert(!configuredHtml.includes("/hooks/done"), "webhook URL was written into the page");
+
+  await checkTodo("fake-no-school");
+  const noSchoolHook = await waitForHook((hook) => hook.body?.todoId === "fake-no-school" && hook.status === 204);
+  assert(noSchoolHook.body.schoolId === "", `blank schoolId was ${noSchoolHook.body.schoolId}`);
+  assert(noSchoolHook.body.action === "Sample task with no school");
+  assert(noSchoolHook.body.remove === false);
+  assert(noSchoolHook.authorization === "Bearer test-token");
+  await page.waitForFunction(() => !document.querySelector('input[data-todo-id="fake-no-school"]'));
+
+  failPosts = true;
+  await checkTodo("fake-tour");
+  await page.waitForFunction(() => !document.querySelector('input[data-todo-id="fake-tour"]'));
+  await waitForHook((hook) => hook.body?.todoId === "fake-tour" && hook.status === 500);
+  const failedQueue = await pendingQueue();
+  assert(failedQueue["fake-tour"]?.posted === false, "a failed POST was treated as synced");
+  await page.waitForSelector("[data-sync-note]");
+  assert((await page.$eval("[data-sync-note]", (node) => node.textContent)).includes("Couldn't sync yet"));
+  const openWhileRetrying = await openActions();
+  assert(!openWhileRetrying.includes("confirm the sample campus tour"), "failed sync put the to-do back");
+  failPosts = false;
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  const tourHook = await waitForHook((hook) => hook.body?.todoId === "fake-tour" && hook.status === 204);
+  assert(tourHook.authorization === "Bearer test-token");
+  assert(tourHook.body.schoolId === "northwind");
+  assert(tourHook.body.action === "Confirm the sample campus tour");
+  assert(tourHook.body.doneDate === chicagoToday());
+  assert(tourHook.body.remove === false);
+  await page.waitForFunction(() => {
+    const queue = JSON.parse(localStorage.getItem("college-tracker.todo-pending.v1") || "{}");
+    return queue["fake-tour"]?.posted === true && !document.querySelector("[data-sync-note]");
+  });
+
+  const refreshed = structuredClone(configured);
+  const lakeshore = refreshed.schools.find((school) => school.id === "lakeshore");
+  lakeshore.nextSteps[0].text = "Republished sample step";
+  await publishTracker(refreshed);
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await page.waitForFunction(() => document.body.innerText.includes("Republished sample step"));
+  const openDuringRefresh = await openActions();
+  assert(!openDuringRefresh.includes("send the fake highlight film"));
+  assert(!openDuringRefresh.includes("confirm the sample campus tour"));
+  assert(!openDuringRefresh.includes("sample task with no school"));
+  assert(openDuringRefresh.includes("read the fake scholarship form"));
+  const duringQueue = await pendingQueue();
+  assert(duringQueue["fake-highlight"]?.posted === true);
+  assert(duringQueue["fake-tour"]?.posted === true);
+  const lakeshoreCard = await page.$$eval(".school-card", (cards) => {
+    const card = cards.find((node) => node.innerText.includes("Lakeshore"));
+    return card ? card.innerText : "";
+  });
+  assert(lakeshoreCard.includes("Republished sample step"), "republish did not update the school list");
+
+  const confirmed = structuredClone(refreshed);
+  confirmed.sync = {
+    doneWebhook: `http://127.0.0.1:${port}/hooks/done`,
+    doneWebhookHeader: ""
+  };
+  for (const todo of confirmed.todos) {
+    if (todo.id === "fake-form") continue;
+    todo.status = "done";
+    todo.doneDate = chicagoToday();
+  }
+  await page.evaluate(() => {
+    localStorage.setItem("college-tracker.todos.v1", JSON.stringify({
+      "fake-tour": false,
+      "fake-highlight": true
+    }));
+  });
+  await publishTracker(confirmed);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-screen="list"]');
+  const openAfterConfirm = await openActions();
+  assert(!openAfterConfirm.includes("send the fake highlight film"), "file status done was reopened");
+  assert(!openAfterConfirm.includes("confirm the sample campus tour"), "a local false override reopened a done to-do");
+  assert(openAfterConfirm.includes("read the fake scholarship form"));
+  const legacy = await page.evaluate(() => localStorage.getItem("college-tracker.todos.v1"));
+  assert(legacy === null, `old check-off override remained: ${legacy}`);
+  const afterQueue = await pendingQueue();
+  assert(!afterQueue["fake-highlight"] && !afterQueue["fake-tour"] && !afterQueue["fake-no-school"], "confirmed items stayed in the pending queue");
+  const doneText = await page.$eval(".todo-done", (node) => node.textContent.toLowerCase());
+  assert(doneText.includes("send the fake highlight film"), "file-done items were dropped from the shared record");
+
+  await checkTodo("fake-form");
+  const formHook = await waitForHook((hook) => hook.body?.todoId === "fake-form" && hook.status === 204);
+  assert(formHook.authorization === "", "an empty header was sent as Authorization");
+  assert(formHook.contentType.toLowerCase().includes("application/json"));
+  assert(!formHook.contentType.toLowerCase().includes("authorization"));
+  assert(formHook.body.schoolId === "lakeshore");
+  assert(formHook.body.action === "Read the fake scholarship form");
+  assert(formHook.body.remove === false);
+  assert(formHook.body.doneDate === chicagoToday());
+  await page.waitForFunction(() => !document.querySelector('input[data-todo-id="fake-form"]'));
+  await page.evaluate(() => {
+    const card = [...document.querySelectorAll(".school-card")].find((node) => node.innerText.includes("Lakeshore"));
+    card.click();
+  });
+  await page.waitForSelector('[data-screen="detail"]');
+  const lakeText = (await page.$eval("main", (node) => node.innerText)).toLowerCase();
+  assert(!lakeText.includes("read the fake scholarship form"), "school detail kept the synced to-do");
+  assert(lakeText.includes("republished sample step"), "school detail missed the republished next step");
+  await page.click('a[href="#/"]');
+  await page.waitForSelector('[data-screen="list"]');
+
   await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
   const dark = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const channels = dark.match(/\d+/g).map(Number);
@@ -209,7 +452,7 @@ try {
   await page.waitForSelector('[data-screen="lock"]');
   assert(!(await page.$('[data-screen="list"]')), "locked app reopened without a passcode");
 
-  const noisy = errors.filter((error) => !/favicon|404|tracker\.enc\.json/i.test(error));
+  const noisy = errors.filter((error) => !/favicon|404|tracker\.enc\.json|hooks\/done|status of 500/i.test(error));
   assert(noisy.length === 0, `browser errors:\n${noisy.join("\n")}`);
   console.log(`browser check ok (375px, ${outDir})`);
 } catch (err) {
