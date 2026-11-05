@@ -557,6 +557,10 @@ input[type="password"], input[type="text"] {
   cursor: pointer;
 }
 
+.sync-note {
+  margin-top: 8px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .primary:active { filter: none; }
 }

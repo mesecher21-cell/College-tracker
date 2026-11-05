@@ -102,7 +102,19 @@ function isHttpUrl(value) {
 
 export function validateTracker(data) {
   const errors = [];
-  if (!knownKeys(data, ["profile", "lastUpdated", "upcoming", "schools"], ["todos"], "tracker", errors)) return errors;
+  if (!knownKeys(data, ["profile", "lastUpdated", "upcoming", "schools"], ["todos", "sync"], "tracker", errors)) return errors;
+
+  if (Object.prototype.hasOwnProperty.call(data, "sync")) {
+    if (knownKeys(data.sync, ["doneWebhook"], ["doneWebhookHeader"], "sync", errors)) {
+      if (typeof data.sync.doneWebhook !== "string") errors.push("sync.doneWebhook must be a string");
+      else if (data.sync.doneWebhook !== "" && !isHttpUrl(data.sync.doneWebhook)) {
+        errors.push("sync.doneWebhook must be an http or https URL");
+      }
+      if (data.sync.doneWebhookHeader !== undefined && typeof data.sync.doneWebhookHeader !== "string") {
+        errors.push("sync.doneWebhookHeader must be a string");
+      }
+    }
+  }
 
   if (exactKeys(data.profile, ["name", "classYear", "gpa", "notes"], "profile", errors)) {
     requireString(data.profile.name, "profile.name", errors);
